@@ -1,5 +1,6 @@
 """
-visualization.py: file containing the functions to make plots 
+visualize_single_example.py: file containing the functions to make plots from the run of a single simulation
+all funtions take as an input the directory to store the graphs in too
 
 CONTAINS:
     - R_ongrid: takes the matrix nxnxn_R with concentrations and returns the plot of such distributions 
@@ -11,7 +12,7 @@ CONTAINS:
     - G_ongrid: takes the nxn matrix of growth rates and returns the plot on grid
     - makenet:  function to draw the metabolic network, takes the metabolic matrix as input
     - vispreferences: function to visualize the uptake preferences
-    - abundances: function to visualize the abundances time series
+    - vis_abundances: function to visualize the abundances time series
     - vis_wm: function to visualize time seriues of well-mixed case
 
 """
@@ -29,23 +30,24 @@ from networkx.drawing.nx_agraph import to_agraph
 from matplotlib.animation import FuncAnimation,ArtistAnimation
 from matplotlib.animation import PillowWriter
 from scipy.stats import entropy
+
 sns.set(style='whitegrid')
 
 #---------------------------------------------------------------------------------
 # define R_ongrid(R) to visualize the equilibrium concentrations for each resource
 
-def R_ongrid(R, exe):
+def R_ongrid(R, dir):
 
     """
     R: matrix, nxnxn_r, chemicals concentrations
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     PLOTS the equilibrium concentrations for each nutrient
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join( exe + '/R_fin.png')
+    plot_path = os.path.join( dir + '/R_fin.png')
 
     # create the grid
     x = np.arange(R.shape[0])
@@ -82,17 +84,17 @@ def R_ongrid(R, exe):
 #--------------------------------------------------------------------------------
 # same but 3D
 
-def R_ongrid_3D(R,exe):
+def R_ongrid_3D(R,dir):
     """
     R: matrix, nxnxn_r, chemicals concentrations
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     PLOTS the equilibrium concentrations for each nutrient
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe + '/R_fin_3D.png')
+    plot_path = os.path.join(dir + '/R_fin_3D.png')
 
     # R matrix as function of x and y plot (one plot per nutrient)
     n_r = R.shape[2]
@@ -124,19 +126,19 @@ def R_ongrid_3D(R,exe):
 #---------------------------------------------------------------------------------
 # define N_ongrid(R) to visualize the disposition of species 
 
-def N_ongrid(N,exe):
+def N_ongrid(N,dir):
 
     """
     N: matrix, nxnxn_s containing nxn elements with length n_s composed by all zeros and
        one corresponding to the species present in the grid point (1 species per grid point)
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     PLOTS the grid with current species disposition
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join( exe + '/N_fin.png')
+    plot_path = os.path.join( dir + '/N_fin.png')
 
     # define colors for species distinction
     cmap = plt.cm.get_cmap('bwr', N.shape[2])  
@@ -161,19 +163,19 @@ def N_ongrid(N,exe):
 #---------------------------------------------------------------------------------
 # define G_ongrid(G) function to visualize growth rates
 
-def G_ongrid(G,N,exe):
+def G_ongrid(G,N,dir):
 
     """
     G: matrix, nxn, growth rates matrix
     N: matrix, nxnxn_s, hot encoded species state
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     RETURNS grid with color gradient corresponding to growth rates
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe + '/G_rates.png')
+    plot_path = os.path.join(dir + '/G_rates.png')
 
     fig = plt.figure(figsize=(N.shape[2]*10,10))
 
@@ -205,18 +207,19 @@ def G_ongrid(G,N,exe):
 # define makenet(met_matrix) to visualize the metabolic processes network, with
 # resources as nodes and allocation magnitude as edges thikness
 
-def makenet(met_matrix, exe):
+def makenet(met_matrix, dir):
 
     """
     met_matrix: matrix, n_rxn_r, with resources as rows and columns and allocation rates as
                 entries
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     RETURNS the graph of metabolic allocations
+
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe, 'met_net.png')
+    plot_path = os.path.join(dir, 'met_net.png')
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
 
     G = nx.DiGraph()
@@ -242,18 +245,18 @@ def makenet(met_matrix, exe):
 # defining vispreferences(up_mat) function to visualize the uptake preferences 
 # of the different species
 
-def vispreferences(mat,exe):
+def vispreferences(mat,dir):
 
     """
     mat: matrix,  n_sxn_r, uptake of the different species and resources
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     RETURNS a graph to visualize uptake preferences 
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe + '/up_pref.png')
+    plot_path = os.path.join(dir + '/up_pref.png')
 
     up_mat = mat['uptake']*mat['sign']
 
@@ -303,19 +306,19 @@ def vispreferences(mat,exe):
 #---------------------------------------------------------------------------------------------------------
 # function to visualize aboundances and determin if steady state is reached
 
-def vis_abundances(ab_list, s_list, exe):
+def vis_abundances(ab_list, s_list, dir):
 
     """
     ab_list: list, abundances
     s_list:  list, shannon diversity 
-    exe: string, executable file
+    dir: string, name of directory to store file in
     
     RETURNS abundance_series: time series matrix of abundances
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe + '/abundances.png') 
+    plot_path = os.path.join(dir + '/abundances.png') 
 
     # Convert the list of lists to a numpy array
     abundance_series = np.array(ab_list)
@@ -353,20 +356,20 @@ def vis_abundances(ab_list, s_list, exe):
 #------------------------------------------------------------------------------------------------
 # visualize well mixed time series
 
-def vis_wm(N, R, exe):
+def vis_wm(N, R, dir):
 
     """
     N: list of vectors, n_s, species abundances
     R: list of vectors, n_r, chemicals concentrations
-    exe: string, name of executable file
+    dir: string, name of directory to store file in
 
     RETURNS time series of well mixed simulation
 
     """
 
     # plotting path and saving name
-    plot_path = os.path.join(exe, 'wmN.png')
-    plot_path_R = os.path.join(exe, 'wmR.png')
+    plot_path = os.path.join(dir, 'wmN.png')
+    plot_path_R = os.path.join(dir, 'wmR.png')
 
     # Create directory if it does not exist
     os.makedirs(os.path.dirname(plot_path), exist_ok=True)
