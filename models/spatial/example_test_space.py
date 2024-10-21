@@ -15,19 +15,18 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.animation import PillowWriter
 
 path = os.path.splitext(os.path.abspath(__file__))[0]
-base_path = path.split('/microbial_ecology_in_space')[0]
-module_path = f'{base_path}/microbial_ecology_in_space/models/shared'
+base_path = path.split('/microbial_ecology_in_space_V2')[0]
+module_path = f'{base_path}/microbial_ecology_in_space_V2/models/shared'
 
 # Add the directory to sys.path
 if module_path not in sys.path:
     sys.path.append(module_path)
 
-from models.spatial.R_dynamics import *
+from R_dynamics import *
 from N_dynamics import *
-from visualize  import *
+from models.shared.visualize_single_example import *
 from update import *
 from SOR import *
-
 
 # create paths to save results
 path = os.path.splitext(os.path.abspath(__file__))[0]
