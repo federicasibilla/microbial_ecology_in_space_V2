@@ -26,13 +26,15 @@ def birth_death_biomass(N, g, param, mat, biomass):
     """
     Update the grid by finding the first cell reaching division threshold
 
-    N: matrix, nxnxn_s, state of the population
+    N: matrix, nxn, state of the population decoded
     g: matrix, nxn, growth rates at this moment
     param: dict, parameters
     mat: dict, matrices
     biomass: matrix, nxn, current biomass values at each point on the grid
 
     RETURNS 
+    - string for the status 
+    - most abundant species
     - new_N: matrix, nxnxn_s, new state of population
     - new_biomass: matrix, nxn, updated biomass matrix
     - t_div: float, time of division event
@@ -45,7 +47,8 @@ def birth_death_biomass(N, g, param, mat, biomass):
     times_mat = np.log(2/biomass)/g
     # find the fastest: first devider
     t_div = np.min(times_mat)
-    i, j = np.random.choice(np.transpose(np.where(times_mat == np.min(times_mat))), size=1)[0]
+    indices = np.where(times_mat == t_div)
+    i, j = np.random.choice(indices[0]), np.random.choice(indices[1])
 
     # Look at the 8 neighbors with periodic boundary conditions
     neighbors_i = np.array([(i-1) % n, i, (i+1) % n, (i+1) % n, (i+1) % n, i, (i-1) % n, (i-1) % n])
@@ -63,8 +66,13 @@ def birth_death_biomass(N, g, param, mat, biomass):
     noise = np.random.uniform(-0.1, 0.1)  # Generate some small noise
     new_biomass[i, j] = 1 + noise
     new_biomass[neighbor_i, neighbor_j] = 1 - noise 
+
+    # check if there is a winner
+    if np.all(N[0, 0] == N):
+        print('One species has taken up all colony space')
+        return 'vittoria', N[0, 0], N, new_biomass, t_div
     
-    return N, new_biomass, t_div
+    return 'ancora', N[0, 0], N, new_biomass, t_div
 
 #---------------------------------------------------------------------------------------------
 # growth_rates(R,N,param,mat) function to calculate the growth rates of each individual

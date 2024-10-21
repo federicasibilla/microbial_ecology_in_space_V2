@@ -20,13 +20,13 @@ from numba import jit
 
 from SOR import *
 from N_dynamics import *
-from models.spatial.R_dynamics import *
+from R_dynamics import *
 
 
 #---------------------------------------------------------------------------------------------
 # simulate_3D: functiln to run a simulation with PBC, in a quasi-3D setting
 
-def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, mat):
+def simulate_3D(steps, source, growth_model, initial_guess, initial_N, initial_b, param, mat):
 
     """
     steps:         int, number of steps we want to run the simulation for
@@ -34,18 +34,11 @@ def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, ma
     growth_model:  function, (*args: R, N, param, mat; out: nxn growth matrix, nxn modulation matrix)
     initial_guess: matrix, nxnxn_r, initial guess for eq. concentrations
     initial_N:     matrix, nxnxn_s, initial composition of species grid
+    initial_b:     matrix, nxn, initial biomass (floats from 0 to 2)
     param:         dictionary, parameters
     mat:           dictionary, matrices
 
-    RETURNS frames_N:  list, all the frames of the population grid, in a decoded species matrix form
-            frames_R:  list, all the frames of the chemicals grid
-            frames_up: list, all the frames of the chemicals grid for uptake
-            frames_in: list, all the frames of the chemicals grid for the production
-            frames_mu: list, all the frames of the liminting modulation of the growth matrix 
-            current_R: matrix, nxnxn_r, final configuration of nutrients grid
-            current_N: matrix, nxnxn_s, final configuration of population grid
-            g_rates:   matrix, nxn, final growth rates
-            s_list:    list, time series of shannon diversity
+    RETURNS last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, new_biomass 
 
     """
 
@@ -60,6 +53,7 @@ def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, ma
     last_2_frames_N  = [decode(initial_N)] 
     abundances = [calc_abundances(initial_N)]
     s_list = [shannon(initial_N)]
+    t_list = [0]
 
     # first iteration
     print('Solving iteration zero, finding equilibrium from initial guess')
@@ -68,13 +62,14 @@ def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, ma
     current_R, _, _ = SOR_3D(initial_N, param, mat, source, initial_guess)
     # computing growth rates on all the grid
     g_rates, mod  = growth_model(current_R,initial_N,param,mat)
-    # performing DB dynamics
-    decoded_N, check, most_present = death_birth_periodic(decode(initial_N),g_rates)
+    # performing BD dynamics
+    check, most_present, decoded_N, new_biomass, t_div = birth_death_biomass(decode(initial_N), g_rates, param, mat, initial_b)
     current_N = encode(decoded_N, all_species)
 
     # store time step
     last_2_frames_N.append(decoded_N)
     abundances.append(calc_abundances(current_N))
+    t_list.append(t_div)
 
     convergence_count = 0
 
@@ -88,12 +83,127 @@ def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, ma
         # compute growth rates
         g_rates, mod  = growth_model(current_R,current_N,param,mat)
         # performe DB dynamics
-        decoded_N,check,most_present = death_birth_periodic(decode(current_N),g_rates)
+        check, most_present, decoded_N, new_biomass, t_div = birth_death_biomass(decode(current_N), g_rates, param, mat, new_biomass)
         # check that there is more than one species
         if check == 'vittoria':
             print('winner species is: ', most_present)
             break
 
+        current_N = encode(decoded_N, all_species)
+
+        # save time step
+        last_2_frames_N  = [last_2_frames_N[1], decoded_N]
+        abundances.append(calc_abundances(current_N))
+        t_list.append(t_div)
+
+        # check if shannon diversity has converged
+        s = shannon(current_N)
+        s_list.append(s)
+
+        if len(s_list)>1000:
+            recent_abundances = np.array(abundances[-300:])  # average of last 300 time steps
+            avg = np.mean(recent_abundances, axis=0) 
+            dev = np.std(recent_abundances, axis=0)
+
+            converged = np.all(np.abs(abundances[-1] - avg) < dev)
+
+            if converged:
+                convergence_count += 1
+            else:
+                convergence_count = 0
+            if convergence_count > 500:
+                print('Abundances have converged for all species')
+                break
+
+        t1 = time()
+        if round((t1-t0)/60,4)>590:
+            break
+
+    # end timing
+    t1 = time()
+    print(f'\n Time taken to solve for {steps} steps: ', round((t1-t0)/60,4), ' minutes \n')
+
+    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, new_biomass 
+
+
+#-------------------------------------------------------------------------------------------------
+# function to perform simulations in multigrid iterations
+
+def simulate_MG(steps, source, growth_model, initial_guess, initial_N, initial_b, param, mat, t):
+
+    """
+    steps:         int, number of steps we want to run the simulation for
+    source:        function, (*args: R,N,param,mat; out: nxn source matrix), reaction in RD equation
+    growth_model:  function, (*args: R, N, param, mat; out: nxn growth matrix, nxn modulation matrix)
+    initial_guess: matrix, nxnxn_r, initial guess for eq. concentrations
+    initial_N:     matrix, nxnxn_s, initial composition of species grid
+    initial_b:     matrix, nxn, initial biomass (floats from 0 to 2)
+    param:         dictionary, parameters
+    mat:           dictionary, matrices
+    t:             int, number of times to refine
+
+    RETURNS last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, new_biomass 
+
+    """
+
+    # start timing simulation
+    t0 = time()
+
+    # extract list of all possible species
+    all_species = list(range(len(param['g'])))
+
+    # lists to store time steps 
+    last_2_frames_N  = [decode(initial_N)] 
+    abundances = [calc_abundances(initial_N)]
+    s_list = [shannon(initial_N)]
+    t_list = [0]
+
+    # initial grid size
+    n = initial_N.shape[0]
+
+    # first iteration
+    print('Solving iteration zero, finding equilibrium from initial guess')
+
+    # computing equilibrium concentration at ztep zero
+    current_R, _, _ = SOR_3D(initial_N, param, mat, source, initial_guess)
+
+    # first refinement
+    finer_R, finer_up, finer_prod = SOR_3D(change_grid_N(initial_N,n*2), param, mat, source, change_grid_R(current_R,n*2))
+    # subsequent refinements
+    for ref in range(3,t+2):
+        m = n*ref
+        finer_R, finer_up, finer_prod = SOR_3D(change_grid_N(initial_N,m), param, mat, source, change_grid_R(finer_R,m))
+    coarser_R = change_grid_R(finer_R,n)
+
+    # computing growth rates on all the grid
+    g_rates, mod  = growth_model(current_R,initial_N,param,mat)
+    # performing BD dynamics
+    check, most_present, decoded_N, new_biomass, t_div = birth_death_biomass(decode(initial_N), g_rates, param, mat, initial_b)
+    current_N = encode(decoded_N, all_species)
+
+    # store time step
+    last_2_frames_N.append(decoded_N)
+    abundances.append(calc_abundances(current_N))
+    t_list.append(t_div)
+
+    convergence_count = 0
+
+    for i in range(steps):
+
+        print("Step %i" % (i+1))
+
+        # compute new equilibrium, initial guess is previous equilibrium
+        finer_R, _, _ = SOR_3D(change_grid_N(current_N,(t+1)*n), param, mat, source, finer_R)
+        coarser_R = change_grid_R(finer_R,n)
+
+        # compute growth rates
+        g_rates, mod  = growth_model(current_R,current_N,param,mat)
+        # performe DB dynamics
+        check, most_present, decoded_N, new_biomass, t_div = birth_death_biomass(decode(current_N), g_rates, param, mat, new_biomass)
+        # check that there is more than one species
+        if check == 'vittoria':
+            print('winner species is: ', most_present)
+            break
         current_N = encode(decoded_N, all_species)
 
         # save time step
@@ -127,332 +237,7 @@ def simulate_3D(steps, source, growth_model, initial_guess, initial_N, param, ma
     t1 = time()
     print(f'\n Time taken to solve for {steps} steps: ', round((t1-t0)/60,4), ' minutes \n')
 
-    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances  
-
-
-#---------------------------------------------------------------------------------------------
-# simulate_sync: functiln to run a simulation with PBC, in a quasi-3D setting
-
-def simulate_sync(steps, source, growth_model, initial_guess, initial_N, param, mat):
-
-    """
-    steps:         int, number of steps we want to run the simulation for
-    source:        function, (*args: R,N,param,mat; out: nxn source matrix), reaction in RD equation
-    growth_model:  function, (*args: R, N, param, mat; out: nxn growth matrix, nxn modulation matrix)
-    initial_guess: matrix, nxnxn_r, initial guess for eq. concentrations
-    initial_N:     matrix, nxnxn_s, initial composition of species grid
-    param:         dictionary, parameters
-    mat:           dictionary, matrices
-
-    RETURNS frames_N:  list, all the frames of the population grid, in a decoded species matrix form
-            frames_R:  list, all the frames of the chemicals grid
-            frames_up: list, all the frames of the chemicals grid for uptake
-            frames_in: list, all the frames of the chemicals grid for the production
-            frames_mu: list, all the frames of the liminting modulation of the growth matrix 
-            current_R: matrix, nxnxn_r, final configuration of nutrients grid
-            current_N: matrix, nxnxn_s, final configuration of population grid
-            g_rates:   matrix, nxn, final growth rates
-            s_list:    list, time series of shannon diversity
-
-    """
-
-    # start timing simulation
-    t0 = time()
-
-    # extract list of all possible species
-    n_s = len(param['g'])
-    all_species = list(range(n_s))
-
-    # lists to store time steps 
-    last_2_frames_N  = [decode(initial_N)] 
-    abundances = [calc_abundances(initial_N)]
-    s_list = [shannon(initial_N)]
-
-    # first iteration
-    print('Solving iteration zero, finding equilibrium from initial guess')
-
-    # computing equilibrium concentration at ztep zero
-    current_R, _, _ = SOR_3D(initial_N, param, mat, source, initial_guess)
-    # computing growth rates on all the grid
-    g_rates, mod  = growth_model(current_R,initial_N,param,mat)
-    # performing DB dynamics
-    decoded_N, check, most_present = death_birth_sync(decode(initial_N),g_rates)
-    current_N = encode(decoded_N, all_species)
-
-    # store time step
-    last_2_frames_N.append(decoded_N)
-    abundances.append(calc_abundances(current_N))
-
-    convergence_count = 0
-
-    for i in range(steps):
-
-        print("Step %i" % (i+1))
-
-        # compute new equilibrium, initial guess is previous equilibrium
-        current_R, _, _ = SOR_3D(current_N, param, mat, source, current_R)
-
-        # compute growth rates
-        g_rates, mod  = growth_model(current_R,current_N,param,mat)
-        # performe DB dynamics
-        decoded_N,check,most_present = death_birth_sync(decode(current_N),g_rates)
-        # check that there is more than one species
-        if check == 'vittoria':
-            print('winner species is: ', most_present)
-            break
-
-        current_N = encode(decoded_N, all_species)
-
-        # save time step
-        last_2_frames_N  = [last_2_frames_N[1], decoded_N]
-        abundances.append(calc_abundances(current_N))
-
-        # check if shannon diversity has converged
-        s = shannon(current_N)
-        s_list.append(s)
-
-        if len(s_list)>1000:
-            recent_abundances = np.array(abundances[-300:])  # average of last 300 time steps
-            avg = np.mean(recent_abundances, axis=0) 
-            dev = np.std(recent_abundances, axis=0)
-
-            converged = np.all(np.abs(abundances[-1] - avg) < dev)
-
-            if converged:
-                convergence_count += 1
-            else:
-                convergence_count = 0
-            if convergence_count > 840:
-                print('Abundances have converged for all species')
-                break
-
-        t1 = time()
-        if round((t1-t0)/60,4)>780:
-            break
-
-    # end timing
-    t1 = time()
-    print(f'\n Time taken to solve for {steps} steps: ', round((t1-t0)/60,4), ' minutes \n')
-
-    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances
-
-
-#----------------------------------------------------------------------------------------------------
-# simulate_2D: functiln to run a simulation with DBC, in a 2D setting
-
-def simulate_2D(steps, source, growth_model, initial_guess, initial_N, param, mat):
-
-    """
-    steps:         int, number of steps we want to run the simulation for
-    source:        function, (*args: R,N,param,mat; out: nxn source matrix), reaction in RD equation
-    growth_model:  function, (*args: R, N, param, mat; out: nxn growth matrix, nxn modulation matrix)
-    initial_guess: matrix, nxnxn_r, initial guess for eq. concentrations
-    initial_N:     matrix, nxnxn_s, initial composition of species grid
-    param:         dictionary, parameters
-    mat:           dictionary, matrices
-
-    RETURNS frames_N:  list, all the frames of the population grid, in a decoded species matrix form
-            frames_R:  list, all the frames of the chemicals grid
-            frames_up: list, all the frames of the chemicals grid for uptake
-            frames_in: list, all the frames of the chemicals grid for the production
-            frames_mu: list, all the frames of the liminting modulation of the growth matrix 
-            current_R: matrix, nxnxn_r, final configuration of nutrients grid
-            current_N: matrix, nxnxn_s, final configuration of population grid
-            g_rates:   matrix, nxn, final growth rates
-            s_list:    list, time series of shannon diversity
-
-    """
-
-    # start timing simulation
-    t0 = time()
-
-    # extract list of all possible species
-    all_species = list(range(len(param['g'])))
-
-    # lists to store time steps 
-    last_2_frames_N  = [decode(initial_N)] 
-    abundances = [calc_abundances(initial_N)]
-    s_list = [shannon(initial_N)]
-
-    # first iteration
-    print('Solving iteration zero, finding equilibrium from initial guess')
-
-    # computing equilibrium concentration at ztep zero
-    current_R, up, prod = SOR_2D(initial_N, param, mat, source, initial_guess)
-    # computing growth rates on all the grid
-    g_rates, mod  = growth_model(current_R,initial_N,param,mat)
-    # performing DB dynamics
-    decoded_N, check, most_present = death_birth_periodic(decode(initial_N),g_rates)
-    current_N = encode(decoded_N, all_species)
-
-    # store time step
-    last_2_frames_N.append(decoded_N)
-    abundances.append(calc_abundances(current_N))
-
-    convergence_count = 0
-
-    for i in range(steps):
-
-        print("Step %i" % (i+1))
-
-        # compute new equilibrium, initial guess is previous equilibrium
-        current_R, up, prod = SOR_2D(current_N, param, mat, source, current_R)
-
-        # compute growth rates
-        g_rates, mod  = growth_model(current_R,current_N,param,mat)
-        # performe DB dynamics
-        decoded_N,check,most_present = death_birth_periodic(decode(current_N),g_rates)
-        # check that there is more than one species
-        if check == 'vittoria':
-            print('winner species is: ', most_present)
-            break
-
-        current_N = encode(decoded_N, all_species)
-
-        # save time step
-        last_2_frames_N  = [last_2_frames_N[1], decoded_N]
-        abundances.append(calc_abundances(current_N))
-
-        # check if shannon diversity has converged
-        s = shannon(current_N)
-        s_list.append(s)
-
-        if len(s_list)>1000:
-            recent_abundances = np.array(abundances[-300:])  # average of last 300 time steps
-            avg = np.mean(recent_abundances, axis=0) 
-            dev = np.std(recent_abundances, axis=0)
-
-            converged = np.all(np.abs(abundances[-1] - avg) < dev)
-
-            if converged:
-                convergence_count += 1
-            else:
-                convergence_count = 0
-            if convergence_count > 100:
-                print('Abundances have converged for all species')
-                break
-        
-        t1 = time()
-        if round((t1-t0)/60,4)>15:
-            break
-
-    # end timing
-    t1 = time()
-    print(f'\n Time taken to solve for {steps} steps: ', round((t1-t0)/60,4), ' minutes \n')
-
-    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances  
-
-
-#-------------------------------------------------------------------------------------------------
-# function to perform simulations in multigrid iterations
-
-def simulate_MG(steps, source, growth_model, initial_guess, initial_N, param, mat, t):
-
-    """
-    steps:         int, number of steps we want to run the simulation for
-    source:        function, (*args: R,N,param,mat; out: nxn source matrix), reaction in RD equation
-    growth_model:  function, (*args: R, N, param, mat; out: nxn growth matrix, nxn modulation matrix)
-    initial_guess: matrix, nxnxn_r, initial guess for eq. concentrations
-    initial_N:     matrix, nxnxn_s, initial composition of species grid
-    param:         dictionary, parameters
-    mat:           dictionary, matrices
-    t:             int, number of refinements
-
-    RETURNS frames_N:  list, all the frames of the population grid, in a decoded species matrix form
-            frames_R:  list, all the frames of the chemicals grid
-            frames_up: list, all the frames of the chemicals grid for uptake
-            frames_in: list, all the frames of the chemicals grid for the production
-            frames_mu: list, all the frames of the liminting modulation of the growth matrix 
-            current_R: matrix, nxnxn_r, final configuration of nutrients grid
-            current_N: matrix, nxnxn_s, final configuration of population grid
-            g_rates:   matrix, nxn, final growth rates
-            s_list:    list, time series of shannon diversity
-
-    """
-
-    # start timing simulation
-    t0 = time()
-
-    # extract list of all possible species
-    all_species = list(range(len(param['g'])))
-
-    # lists to store time steps 
-    last_2_frames_N  = [decode(initial_N)] 
-    abundances = [calc_abundances(initial_N)]
-    s_list = [shannon(initial_N)]
-
-    # initial grid size
-    n = initial_N.shape[0]
-
-    # first iteration
-    print('Solving iteration zero, finding equilibrium from initial guess')
-
-    # computing equilibrium concentration at ztep zero
-    current_R, _, _ = SOR_3D(initial_N, param, mat, source, initial_guess)
-
-    # first refinement
-    finer_R, finer_up, finer_prod = SOR_3D(change_grid_N(initial_N,n*2), param, mat, source, change_grid_R(current_R,n*2))
-    # subsequent refinements
-    for ref in range(3,t+2):
-        m = n*ref
-        finer_R, finer_up, finer_prod = SOR_3D(change_grid_N(initial_N,m), param, mat, source, change_grid_R(finer_R,m))
-    coarser_R = change_grid_R(finer_R,n)
-
-    # computing growth rates on all the grid
-    g_rates, mod   = growth_model(coarser_R,initial_N,param,mat)
-    # performing DB dynamics
-    decoded_N,check,most_present = death_birth_periodic(decode(initial_N),g_rates)
-    current_N = encode(decoded_N, all_species)
-
-    # store time step
-    last_2_frames_N.append(decoded_N)
-    abundances.append(calc_abundances(current_N))
-
-    convergence_count = 0
-
-    for i in range(steps):
-
-        print("Step %i" % (i+1))
-
-        # compute new equilibrium, initial guess is previous equilibrium
-        finer_R, _, _ = SOR_3D(change_grid_N(current_N,(t+1)*n), param, mat, source, finer_R)
-        coarser_R = change_grid_R(finer_R,n)
-
-        # compute growth rates
-        g_rates, mod  = growth_model(coarser_R,current_N,param,mat)
-        # performe DB dynamics
-        decoded_N,check,most_present = death_birth_periodic(decode(current_N),g_rates)
-        # check that there is more than one species
-        if check == 'vittoria':
-            print('winner species is: ', most_present)
-            break
-        current_N = encode(decoded_N, all_species)
-
-        # save time step
-        last_2_frames_N  = [last_2_frames_N[1], decoded_N]
-        abundances.append(calc_abundances(current_N))
-
-        # check if shannon diversity has converged
-        s = shannon(current_N)
-        s_list.append(s)
-
-        #if len(s_list)>1000:
-        #    avg = sum(s_list[-200:])/200
-        #    dev = np.sqrt(sum((s_list[-200:]-avg)**2)/200)
-#
-        #    if(np.abs(s-avg)<dev):
-        #        convergence_count += 1
-        #    else: 
-        #        convergence_count = 0
-        #    if convergence_count > 100:
-        #        print('shannon diversity has converged')
-        #        break
-
-    # end timing
-    t1 = time()
-    print(f'\n Time taken to solve for {steps} steps: ', round((t1-t0)/60,4), ' minutes \n')
-
-    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances
+    return last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, new_biomass 
 
 
 #-------------------------------------------------------------------------------------------------

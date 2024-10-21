@@ -428,3 +428,46 @@ def vis_wm(N, R, dir):
     plt.close()
 
     return
+
+#------------------------------------------------------------------------------------------------
+# visualize time intervals between events
+
+def vis_intervals(intervals_list, dir):
+
+    """
+    intervals_list: list, time intervals between events
+    dir: string, name of directory to store file in
+    
+    RETURNS interval_series: time series of time intervals
+    
+    """
+
+    # Plotting path and saving name
+    plot_path = os.path.join(dir, 'intervals.png') 
+
+    # Convert the list of intervals to a numpy array
+    interval_series = np.array(intervals_list)
+
+    # Create subplots
+    fig, axs = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot time series of intervals
+    axs[0].plot(interval_series, color='blue', label='Time Intervals')
+    axs[0].set_xlabel('Time Step')
+    axs[0].set_ylabel('Time Interval')
+    axs[0].set_title('Time Series of Intervals')
+    axs[0].grid(True)
+    axs[0].legend()
+
+    # Plot density of the intervals
+    sns.kdeplot(interval_series, ax=axs[1], fill=True, color='orange')
+    axs[1].set_xlabel('Time Interval')
+    axs[1].set_ylabel('Density')
+    axs[1].set_title('Density Plot of Intervals')
+    axs[1].grid(True)
+
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    plt.savefig(plot_path)
+
+    return interval_series

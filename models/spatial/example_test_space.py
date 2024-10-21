@@ -14,6 +14,7 @@ import sys
 from matplotlib.animation import FuncAnimation
 from matplotlib.animation import PillowWriter
 
+
 path = os.path.splitext(os.path.abspath(__file__))[0]
 base_path = path.split('/microbial_ecology_in_space_V2')[0]
 module_path = f'{base_path}/microbial_ecology_in_space_V2/models/shared'
@@ -24,7 +25,8 @@ if module_path not in sys.path:
 
 from R_dynamics import *
 from N_dynamics import *
-from models.shared.visualize_single_example import *
+from visualize_single_example import *
+from create_matrices import *
 from update import *
 from SOR import *
 
@@ -48,30 +50,11 @@ n   = 100
 np.random.seed(22)
 
 # drawing uptake matrix from binary distribution
-up_mat = np.zeros((n_s,n_r))
-# each species has a given number of preferred resources
-for i in range(n_s):
-    ones_indices = np.random.choice(n_r, 3, replace=False)
-    up_mat[i, ones_indices] = 0.001
-# check that someone eats primary source
-if (up_mat[:,0] == 0).all():
-    up_mat[random.randint(0, n_s-1),0] = 0.001
+up_mat = up_binary(n_s,n_r,3)
+
 
 # random metabolic matrix: sample from Dir. + sparsity + constraints
-met_mat = np.ones((n_r,n_r))*(np.random.rand(n_r, n_r) > 0.8)      # make metabolic matrix sparce
-met_mat[0,:] = 0                                                   # carbon source is not produced
-np.fill_diagonal(met_mat, 0)                                       # diagonal elements should be 0
-# check that at least one thing is produced from primary carbon source
-if (met_mat[:,0] == 0).all():
-    met_mat[random.randint(0, n_r-1),0] = 1
-# sample all from D. distribution
-for column in range(n_r):
-    # Find indices where matrix[:, col_idx] == 1 (non-zero entries)
-    non_zero_indices = np.where(met_mat[:, column] == 1)[0]  
-    if len(non_zero_indices) > 0:
-        # Sample from Dirichlet distribution for non-zero entries
-        dirichlet_values = np.random.dirichlet(np.ones(len(non_zero_indices)))
-        met_mat[non_zero_indices, column] = dirichlet_values
+met_mat = met_dir(n_r,0.8)
 
 sign_mat = np.ones((n_s,n_r))
 
@@ -84,6 +67,8 @@ spec_met = np.ones((n_s,n_r))
 # totally symmetric g and m
 g = np.ones((n_s))
 m = np.zeros((n_s))
+# initialize random biomass
+biomass = np.random.uniform(0, 2, (n, n))
 
 # no reinsertion of chemicals
 R0 = np.zeros((n,n,n_r))
@@ -126,7 +111,7 @@ mat = {
 
 # initial guesses and conditions
 R_space_ig = np.zeros((n,n,n_r))
-R_space_ig[:,:,0]=10
+R_space_ig[:,:,0]=5
 N0_space   = encode(np.random.randint(0, 8, size=(n,n)),np.array(np.arange(n_s)))
 N0_wm      = np.bincount(decode(N0_space).flatten(), minlength=n_s)/(n*n)
 
@@ -140,7 +125,7 @@ with open(f"{output_dir}/parameters.txt", 'w') as file:
     for key, value in mat.items():
         file.write(f"{key}:\n{value}\n\n")
 
-last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances = simulate_3D_maslov(10, f_maslov, R_space_ig, N0_space, param, mat)
+last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, biomass  = simulate_MG(10, f, growth_rates, R_space_ig, N0_space, biomass, param, mat,1)
 
 # save results as csv
 np.save(f'{output_dir}/R_fin.npz', current_R)
@@ -159,4 +144,5 @@ R_ongrid_3D(current_R,graphs_dir)
 vis_abundances(abundances,s_list,graphs_dir)
 makenet(met_mat,matric_dir)
 vispreferences(mat,matric_dir)
+vis_intervals(t_list, graphs_dir)
 
