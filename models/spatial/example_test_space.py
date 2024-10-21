@@ -11,10 +11,6 @@ import pstats
 import os
 import sys
 
-from matplotlib.animation import FuncAnimation
-from matplotlib.animation import PillowWriter
-
-
 path = os.path.splitext(os.path.abspath(__file__))[0]
 base_path = path.split('/microbial_ecology_in_space_V2')[0]
 module_path = f'{base_path}/microbial_ecology_in_space_V2/models/shared'
@@ -125,7 +121,7 @@ with open(f"{output_dir}/parameters.txt", 'w') as file:
     for key, value in mat.items():
         file.write(f"{key}:\n{value}\n\n")
 
-last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, biomass  = simulate_MG(10, f, growth_rates, R_space_ig, N0_space, biomass, param, mat,1)
+last_2_frames_N, mod, current_R, current_N, g_rates, s_list, abundances, t_list, biomass  = simulate_3D_NBC(1000, f, growth_rates, R_space_ig, N0_space, biomass, param, mat)
 
 # save results as csv
 np.save(f'{output_dir}/R_fin.npz', current_R)
@@ -142,7 +138,7 @@ G_ongrid(g_rates,encode(last_2_frames_N[-2], np.array(np.arange(n_s))),graphs_di
 N_ongrid(current_N,graphs_dir)
 R_ongrid_3D(current_R,graphs_dir)
 vis_abundances(abundances,s_list,graphs_dir)
-makenet(met_mat,matric_dir)
+#makenet(met_mat,matric_dir)
 vispreferences(mat,matric_dir)
 vis_intervals(t_list, graphs_dir)
 
